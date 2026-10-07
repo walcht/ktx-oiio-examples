@@ -1,6 +1,6 @@
 /*
  * Copyright 2026 Walid Chtioui @ walid.chtioui.main@gmail.com
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: MIT
  */
 
 /*
