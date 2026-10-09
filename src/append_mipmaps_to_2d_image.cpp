@@ -23,6 +23,26 @@
 
 using namespace OIIO;
 
+#define CHECK_OIIO_RESULT(rv, interface)                                       \
+  do {                                                                         \
+    if (!rv) {                                                                 \
+      if (interface->has_error()) {                                            \
+        std::cerr << "fatal error: " << interface->geterror() << std::endl;    \
+        return 1;                                                              \
+      }                                                                        \
+      std::cerr << "some error encountered: " << std::endl;                    \
+      return 1;                                                                \
+    }                                                                          \
+  } while (0)
+
+#define CHECK_OIIO_RESULT_G(rv)                                                \
+  do {                                                                         \
+    if (!rv) {                                                                 \
+      std::cerr << "fatal error: " << OIIO::geterror() << std::endl;           \
+      return 1;                                                                \
+    }                                                                          \
+  } while (0)
+
 int main(int argc, char **argv) {
 #define PRINT_USAGE()                                                          \
   std::cerr << "usage: " << argv[0] << " INPUT_FILEPATH OUTPUT_KTX2_FILEPATH"  \
@@ -33,15 +53,6 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-#define PRINT_ERROR(FUNCTION_NAME, ptr)                                        \
-  do {                                                                         \
-    if (ptr->has_error())                                                      \
-      std::cerr << FUNCTION_NAME << " failed. Reason: " << ptr->geterror()     \
-                << '\n';                                                       \
-    else                                                                       \
-      std::cerr << FUNCTION_NAME << " failed." << '\n';                        \
-  } while (0)
-
   const auto inp_fp = std::filesystem::path(argv[1]);
   const auto out_fp = argv[2];
   if (!std::filesystem::exists(inp_fp)) {
@@ -50,50 +61,42 @@ int main(int argc, char **argv) {
   }
 
   auto inp = ImageInput::open(inp_fp);
-  if (!inp) {
-    std::cerr << "ImageInput::open failed. Reason: " << OIIO::geterror()
-              << '\n';
-    return 1;
-  }
+  CHECK_OIIO_RESULT_G(inp);
 
   const ImageSpec &spec = inp->spec();
 
+  // If a volume input image is provided, just read first slice as 2D image and
+  // ignore the others
   if (spec.depth > 1)
     std::cout << "volume input; ignoring volume slices of index >= 1" << '\n';
 
   // Read base mip level image (in case of volume, just reserve size of one
   // slice)
-  std::vector<unsigned char> pixels(spec.width * spec.height * spec.nchannels);
+  std::vector<uint8_t> pixels(spec.image_bytes());
+  bool rv = true;
   //
   // Q. Why not use read_image?
-  // A. In the input is a 3D image, read_image() with a particular subimage,
+  // A. If the input is a 3D image, read_image() with a particular subimage,
   //    returns a 3D submimage and not a 2D slice.
   //
-  if (!inp->read_scanlines(0, 0, 0, spec.height, 0, 0, spec.nchannels,
-                           TypeDesc::UINT8, pixels.data())) {
-    // no need to call close() since it will be called in the destructor
-    PRINT_ERROR("read_scanlines()", inp);
-    return 1;
-  }
+  rv = inp->read_scanlines(0, 0, 0, spec.height, 0, 0, spec.nchannels,
+                           TypeDesc::UINT8, pixels.data());
+  CHECK_OIIO_RESULT(rv, inp);
 
-  if (!inp->close()) {
-    std::cerr << "inp->close() failed. Reason: " << OIIO::geterror() << '\n';
-    return 1;
-  }
+  rv = inp->close();
+  CHECK_OIIO_RESULT(rv, inp);
 
   std::unique_ptr<ImageOutput> out = ImageOutput::create("ktx2");
-  if (!out) {
-    return 1;
-  }
+  CHECK_OIIO_RESULT_G(out);
 
-  // Be sure we can support mipmaps
+  // KTX2 always support mipmaps
   if (!out->supports("mipmap")) {
     std::cerr << "cannot write a MIP-map\n";
     return 1;
   }
 
   // Set up spec for the highest resolution
-  ImageSpec outspec(spec);
+  ImageSpec outspec = inp->spec_dimensions(0, 0);
   // Can only perform 2D filtering (input image could be 3D)
   outspec.depth = 1;
 
@@ -101,16 +104,12 @@ int main(int argc, char **argv) {
   ImageBuf base_miplevel(outspec, make_cspan(pixels));
 
   // Write base image (MIP level 0)
-  if (!out->open(out_fp, outspec, ImageOutput::Create)) {
-    PRINT_ERROR("out->open()", out);
-    return 1;
-  }
+  rv = out->open(out_fp, outspec, ImageOutput::Create);
+  CHECK_OIIO_RESULT(rv, out);
 
-  if (!out->write_image(TypeDesc::UINT8,
-                        base_miplevel.localpixels_as_byte_image_span())) {
-    PRINT_ERROR("out->write_image()", out);
-    return 1;
-  }
+  rv = out->write_image(TypeDesc::UINT8,
+                        base_miplevel.localpixels_as_byte_image_span());
+  CHECK_OIIO_RESULT(rv, out);
 
   // Write images, halving every time, until we're down to 1 pixel in either
   // dimension
@@ -134,23 +133,16 @@ int main(int argc, char **argv) {
     //
     ImageBuf dst = ImageBufAlgo::resize(base_miplevel,
                                         {{"filtername", "lanczos3"}}, roi, 1);
-    if (!out->open(out_fp, outspec, ImageOutput::AppendMIPLevel)) {
-      PRINT_ERROR("out->open()", out);
-      return 1;
-    }
-    if (!out->write_image(TypeDesc::UINT8,
-                          dst.localpixels_as_byte_image_span())) {
-      PRINT_ERROR("out->write_image()", out);
-      return 1;
-    }
+    rv = out->open(out_fp, outspec, ImageOutput::AppendMIPLevel);
+    CHECK_OIIO_RESULT(rv, out);
+
+    rv =
+        out->write_image(TypeDesc::UINT8, dst.localpixels_as_byte_image_span());
+    CHECK_OIIO_RESULT(rv, out);
   }
 
-  if (!out->close()) {
-    PRINT_ERROR("out->close()", out);
-    return 1;
-  }
-
-  std::cout << "success" << '\n';
+  rv = out->close();
+  CHECK_OIIO_RESULT(rv, out);
 
   return 0;
 }

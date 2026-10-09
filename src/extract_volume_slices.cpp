@@ -4,10 +4,9 @@
  */
 
 /*
- * Extract layers (i.e., subimages) from given array KTX2 file into a given
- * directory.
+ * Extract volume slices from given KTX2 file into a given directory.
  *
- * Showcases how to read array textures.
+ * Showcases how to read 3D (i.e., volume) textures using OpenImageIO.
  */
 
 #include <OpenImageIO/span.h>
@@ -81,42 +80,69 @@ int main(int argc, char *argv[]) {
   auto inp = ImageInput::open(inp_fp);
   CHECK_OIIO_RESULT_G(inp);
 
-  int subimage = 0;
+  // Is the input KTX2 texture a volume texture?
+  if (auto Q = inp->spec().find_attribute("textureformat", TypeDesc::STRING)) {
+    if (!Strutil::iequals(Q->get_string(), "Volume Texture")) {
+      std::cerr << "input KTX2 texture is not a volume texture" << std::endl;
+      return 1;
+    }
+  } else {
+    // for KTX2, this attribute is ALWAYS set so this should never occur
+    std::cerr << "attribute \"textureformat\" is not set" << std::endl;
+    return 1;
+  }
+
+  const int subimage = 0;
+  int miplevel = 0;
 
   bool rv = true;
 
-  // Textures in arrays in KTX2 are all required to have the same dimensions.
-  // Simply allocate a single buffer of size base mipmap (all other mips are
-  // smaller so this is sufficient).
-  std::vector<uint8_t> pixels(inp->spec().image_bytes());
-  assert(inp->spec().image_bytes() ==
-         inp->spec().width * inp->spec().height * inp->spec().pixel_bytes());
-  while (inp->seek_subimage(subimage, 0)) {
-    int miplevel = 0;
-    while (inp->seek_subimage(subimage, miplevel)) {
-      const ImageSpec &curr_spec = inp->spec_dimensions(subimage, miplevel);
+  // Do NOT use spec->image_bytes() as this will return the size of a whole 3D
+  // volume in bytes. What we want instead is the size of a slice in bytes of
+  // the base miplevel volume.
+  std::vector<uint8_t> pixels(inp->spec().width * inp->spec().height *
+                              inp->spec().pixel_bytes());
+  while (inp->seek_subimage(subimage, miplevel)) {
+    const ImageSpec &curr_spec = inp->spec_dimensions(subimage, miplevel);
 
-      rv = inp->read_image(subimage, miplevel, 0, curr_spec.nchannels,
-                           make_span(pixels.data(), curr_spec.image_bytes()));
+    // For 3D volumes, we read a particular slice using tile-based OIIO API
+    // calls. This nay seem weird (and it does!) but this is the only way to
+    // achieve this using the current OIIO API. A much better alternative could
+    // have been setting the 'z' parameter for some read_image() calls but there
+    // is none that accepts it while also accepting span-based data (some major
+    // limitation if you were to ask me).
+    assert(curr_spec.tile_width == curr_spec.width);
+    assert(curr_spec.tile_height == 1);
+    assert(curr_spec.tile_depth == 1);
+
+    const size_t slice_size_in_bytes =
+        curr_spec.width * curr_spec.height * curr_spec.pixel_bytes();
+
+    for (int slice_idx = 0; slice_idx < curr_spec.depth; ++slice_idx) {
+      rv = inp->read_tiles(subimage, miplevel, 0, curr_spec.tile_width, 0,
+                           curr_spec.width, slice_idx, slice_idx + 1, 0,
+                           curr_spec.nchannels,
+                           make_span(pixels.data(), slice_size_in_bytes));
       CHECK_OIIO_RESULT(rv, inp);
 
       const auto out_fp =
-          out_dir / fmt::format("{}_miplvl_{}_layer_{}.png",
-                                inp_fp.stem().c_str(), miplevel, subimage);
+          out_dir / fmt::format("{}_miplvl_{}_slice_{}.png",
+                                inp_fp.stem().c_str(), miplevel, slice_idx);
       std::unique_ptr<ImageOutput> out = ImageOutput::create("png");
       CHECK_OIIO_RESULT_G(out);
 
-      rv = out->open(out_fp, curr_spec);
+      ImageSpec out_spec(curr_spec.width, curr_spec.height,
+                         curr_spec.nchannels);
+      rv = out->open(out_fp, out_spec);
       CHECK_OIIO_RESULT(rv, out);
 
-      rv = out->write_image(make_span(pixels.data(), curr_spec.image_bytes()));
+      rv = out->write_image(make_span(pixels.data(), slice_size_in_bytes));
       CHECK_OIIO_RESULT(rv, out);
 
       rv = out->close();
       CHECK_OIIO_RESULT(rv, out);
-      ++miplevel;
     }
-    ++subimage;
+    ++miplevel;
   }
 
   rv = inp->close();
