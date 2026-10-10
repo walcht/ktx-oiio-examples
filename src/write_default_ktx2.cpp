@@ -1,3 +1,12 @@
+/*
+ * Copyright 2026 Walid Chtioui @ walid.chtioui.main@gmail.com
+ * SPDX-License-Identifier: MIT
+ */
+
+/*
+ * Read an input file and write it as a default KTX2 output texture.
+ */
+
 #include <OpenImageIO/span.h>
 #include <cstdlib>
 #include <cstring>
@@ -8,10 +17,30 @@
 
 using namespace OIIO;
 
+#define CHECK_OIIO_RESULT(rv, interface)                                       \
+  do {                                                                         \
+    if (!rv) {                                                                 \
+      if (interface->has_error()) {                                            \
+        std::cerr << "fatal error: " << interface->geterror() << std::endl;    \
+        return 1;                                                              \
+      }                                                                        \
+      std::cerr << "some error encountered: " << std::endl;                    \
+      return 1;                                                                \
+    }                                                                          \
+  } while (0)
+
+#define CHECK_OIIO_RESULT_G(rv)                                                \
+  do {                                                                         \
+    if (!rv) {                                                                 \
+      std::cerr << "fatal error: " << OIIO::geterror() << std::endl;           \
+      return 1;                                                                \
+    }                                                                          \
+  } while (0)
+
 int main(int argc, char *argv[]) {
 #define PRINT_USAGE()                                                          \
-  std::cerr << "usage: " << argv[0] << " INPUT_FILEPATH OUTPUT_FILEPATH"  \
-            << '\n'
+  std::cerr << "usage: " << argv[0] << " INPUT_FILEPATH OUTPUT_FILEPATH"       \
+            << std::endl
 
   if (argc != 3) {
     PRINT_USAGE();
@@ -19,65 +48,45 @@ int main(int argc, char *argv[]) {
   }
 
   const auto inp_fp = std::filesystem::path(argv[1]);
-  const auto out_fp = argv[2];
+  const auto out_fp = std::filesystem::path(argv[2]);
+
   if (!std::filesystem::exists(inp_fp)) {
-    std::cerr << "provided input file does not exist: " << inp_fp << '\n';
+    std::cerr << "provided input file does not exist: " << inp_fp << std::endl;
+    return 1;
+  }
+
+  if (std::filesystem::exists(out_fp)) {
+    std::cerr << "provided output file already exists" << std::endl;
     return 1;
   }
 
   auto inp = ImageInput::open(inp_fp);
-  if (!inp) {
-    std::cerr << "ImageInput::open failed. Reason: " << OIIO::geterror()
-              << '\n';
-    return 1;
-  }
+  CHECK_OIIO_RESULT_G(inp);
 
   const int miplvl = 0;
   const int subimage = 0;
 
+  bool rv = true;
+
   const ImageSpec &spec = inp->spec();
-  const int xres = std::max(spec.width >> miplvl, 1);
-  const int yres = std::max(spec.height >> miplvl, 1);
-  [[maybe_unused]] const int zres = std::max(spec.depth >> miplvl, 1);
-  const int nchannels = spec.nchannels;
+  std::vector<unsigned char> pixels(spec.image_bytes());
+  rv = inp->read_image(subimage, miplvl, 0, spec.nchannels, make_span(pixels));
+  CHECK_OIIO_RESULT(rv, inp);
 
-  if (auto nlayers_ptr = spec.find_attribute("ktx:nlayers"); nlayers_ptr) {
-    std::cout << "nbr layers: "
-              << *static_cast<const uint32_t *>(nlayers_ptr->data()) << '\n';
-  }
-  std::vector<unsigned char> pixels(xres * yres * nchannels);
-  if (!inp->read_image(subimage, miplvl, 0, nchannels, make_span(pixels))) {
-    std::cerr << "ImageInput::read_image() failed. Reason: " << OIIO::geterror()
-              << '\n';
-    // no need to call close() since it will be called in the destructor
-    return 1;
-  }
-  if (!inp->close()) {
-    std::cerr << "inp->close() failed. Reason: " << OIIO::geterror() << '\n';
-    return 1;
-  }
+  rv = inp->close();
+  CHECK_OIIO_RESULT(rv, inp);
 
-  std::unique_ptr<ImageOutput> out = ImageOutput::create(out_fp);
-  if (!out) {
-    std::cerr << "out->create() failed." << '\n';
-    return 1;
-  }
+  std::unique_ptr<ImageOutput> out = ImageOutput::create("ktx2");
+  CHECK_OIIO_RESULT_G(out);
 
-  ImageSpec outspec = ImageSpec(xres, yres, nchannels, TypeDesc::UINT8);
-  if (!out->open(out_fp, outspec)) {
-    std::cerr << "out->open() failed. Reason: " << OIIO::geterror() << '\n';
-    return 1;
-  }
+  rv = out->open(out_fp, spec);
+  CHECK_OIIO_RESULT(rv, out);
 
-  if (!out->write_image(make_cspan(pixels))) {
-    std::cerr << "out->write_image() failed. Reason: " << OIIO::geterror()
-              << '\n';
-    return 1;
-  }
+  rv = out->write_image(make_cspan(pixels));
+  CHECK_OIIO_RESULT(rv, out);
 
-  if (!out->close()) {
-    std::cerr << "out->close() failed. Reason: " << OIIO::geterror() << '\n';
-    return 1;
-  }
+  rv = out->close();
+  CHECK_OIIO_RESULT(rv, out);
+
   return 0;
 }

@@ -18,40 +18,57 @@
 
 using namespace OIIO;
 
-int main() {
-  const auto fn = "uastc_from_blank_input.ktx2";
-  const auto fp = std::filesystem::current_path() / "output" / fn;
+#define CHECK_OIIO_RESULT(rv, interface)                                       \
+  do {                                                                         \
+    if (!rv) {                                                                 \
+      if (interface->has_error()) {                                            \
+        std::cerr << "fatal error: " << interface->geterror() << std::endl;    \
+        return 1;                                                              \
+      }                                                                        \
+      std::cerr << "some error encountered: " << std::endl;                    \
+      return 1;                                                                \
+    }                                                                          \
+  } while (0)
+
+#define CHECK_OIIO_RESULT_G(rv)                                                \
+  do {                                                                         \
+    if (!rv) {                                                                 \
+      std::cerr << "fatal error: " << OIIO::geterror() << std::endl;           \
+      return 1;                                                                \
+    }                                                                          \
+  } while (0)
+
+int main(int argc, char **argv) {
+#define PRINT_USAGE()                                                          \
+  std::cerr << "usage: " << argv[0] << " KTX2_OUTPUT_FILEPATH" << std::endl
+
+  if (argc != 2) {
+    PRINT_USAGE();
+    return 1;
+  }
+
+  const auto out_fp = std::filesystem::path(argv[1]);
+  if (std::filesystem::exists(out_fp)) {
+    std::cerr << "output file already exists" << std::endl;
+    return 1;
+  }
+
   const int xres = 40, yres = 40, nchannels = 3;
   const size_t pixels_pitch = xres * nchannels;
   std::vector<float> pixels(pixels_pitch * yres, 0.5f);
 
   std::unique_ptr<ImageOutput> out = ImageOutput::create("ktx2");
-  if (!out) {
-    std::cerr << "ImageOutput::create(\"ktx2\") failed." << '\n';
-    return 1;
-  }
+  CHECK_OIIO_RESULT_G(out);
+
   ImageSpec outspec(xres, yres, nchannels, TypeDesc::UINT8);
-  if (!out->open(fp, outspec)) {
-    if (OIIO::has_error())
-      std::cerr << "out->close() failed. Reason: " << OIIO::geterror() << '\n';
-    else
-      std::cerr << "out->close() failed." << '\n';
-    return 1;
-  }
-  if (!out->write_image(TypeDesc::FLOAT, pixels.data())) {
-    if (OIIO::has_error())
-      std::cerr << "out->write_image() failed. Reason: " << OIIO::geterror()
-                << '\n';
-    else
-      std::cerr << "out->write_image() failed." << '\n';
-    return 1;
-  }
-  if (!out->close()) {
-    if (OIIO::has_error())
-      std::cerr << "out->close() failed. Reason: " << OIIO::geterror() << '\n';
-    else
-      std::cerr << "out->close() failed." << '\n';
-    return 1;
-  }
+  bool rv = out->open(out_fp, outspec);
+  CHECK_OIIO_RESULT(rv, out);
+
+  rv = out->write_image(TypeDesc::FLOAT, pixels.data());
+  CHECK_OIIO_RESULT(rv, out);
+
+  rv = out->close();
+  CHECK_OIIO_RESULT(rv, out);
+
   return 0;
 }

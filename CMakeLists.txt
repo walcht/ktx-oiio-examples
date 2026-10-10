@@ -6,27 +6,31 @@ find_package(OpenImageIO REQUIRED
 # In case you have installed OIIO in a custom location:
   HINTS /home/walcht/OpenImageIO/dist/lib/cmake/OpenImageIO
 )
+
+if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+  get_target_property(OIIO_LIBRARY OpenImageIO::OpenImageIO IMPORTED_LOCATION_DEBUG)
+  message(STATUS "OpenImageIO library: ${OIIO_LIBRARY}")
+endif()
+
 find_package(Ktx 5.0.0 REQUIRED)
 
 # Global compiler options/configuration
 if (SANITIZE AND CMAKE_BUILD_TYPE STREQUAL "Debug")
-  if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    add_compile_options(-fsanifize="${SANITIZE}")
-    add_link_options(-fsanifize="${SANITIZE}")
-    add_compile_options (-fno-omit-frame-pointer -fPIC)
-  elseif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    add_compile_options(-fsanitize=${SANITIZE} -fno-omit-frame-pointer -fPIC)
+    add_link_options(-fsanitize=${SANITIZE})
+  endif()
+  if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     if (NOT MINGW)
       # finds writes past size of std::vector (won't be detected without this)
-      add_compile_definitions (_GLIBCXX_SANITIZE_VECTOR=1)
-      add_compile_options(-fsanifize="${SANITIZE}")
-      add_link_options(-fsanifize="${SANITIZE}")
-      add_compile_options (-fno-omit-frame-pointer -fPIC)
+      add_compile_definitions(_GLIBCXX_SANITIZE_VECTOR=1)
     else()
       message(WARNING "Address sanitation is not supported on MinGW/GNU consider switching to MINGW/Clang")
     endif()
   endif()
-elseif (SANITIZE AND MSVC)
-  message(WARNING "Address sanitation on Windows MSVC is not supported") 
+  if (MSVC)
+    message(WARNING "Address sanitation on Windows MSVC is not supported")
+  endif()
 endif()
 
 file(GLOB src_files "src/*.cpp")
