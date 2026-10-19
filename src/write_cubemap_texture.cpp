@@ -118,6 +118,10 @@ int main(int argc, char *argv[]) {
   out_spec.tile_width = face_spec.width;
   out_spec.tile_height = face_spec.height;
 
+  // MUST set textureformat to "CubeFace Environment" otherwise open() will
+  // error out
+  out_spec.attribute("textureformat", "CubeFace Environment");
+
   std::vector<uint8_t> pixels(out_spec.tile_bytes());
   assert(out_spec.tile_bytes() ==
          out_spec.tile_width * out_spec.tile_height * out_spec.pixel_bytes());
@@ -125,7 +129,7 @@ int main(int argc, char *argv[]) {
   rv = out->open(out_fp, out_spec);
   CHECK_OIIO_RESULT(rv, out);
 
-  for (size_t face_idx = 0; face_idx < 1; ++face_idx) {
+  for (size_t face_idx = 0; face_idx < 6; ++face_idx) {
     auto inp = ImageInput::open(inp_faces[face_idx]);
     CHECK_OIIO_RESULT_G(inp);
 

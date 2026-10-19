@@ -122,6 +122,9 @@ int main(int argc, char *argv[]) {
   out_spec.tile_width = slice_spec.width;
   out_spec.tile_height = 1;
   out_spec.tile_depth = 1;
+
+  // If depth == 1, MUST set textureformat to "Volume Texture" (just set it
+  // always)
   out_spec.attribute("textureformat", "Volume Texture");
 
   rv = out->open(out_fp, out_spec);
